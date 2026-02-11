@@ -153,6 +153,42 @@
       color: #eee;
     }
 
+    /* Daily sub-toggle */
+    .daily-toggle {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 12px;
+      margin-bottom: -4px;
+    }
+    .daily-toggle .toggle-group {
+      display: flex;
+      gap: 2px;
+      background: rgba(20, 20, 28, 0.5);
+      border-radius: 6px;
+      padding: 2px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .daily-toggle .toggle-btn {
+      padding: 5px 12px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: #555;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .daily-toggle .toggle-btn:hover {
+      color: #888;
+      background: rgba(255,255,255,0.04);
+    }
+    .daily-toggle .toggle-btn.active {
+      background: rgba(255,255,255,0.08);
+      color: #eee;
+    }
+
     /* Footer */
     .footer {
       margin-top: 24px;
@@ -193,6 +229,14 @@
     <div id="tabs" class="tabs" style="display:none;">
       <button class="tab-btn active" data-tab="timeline">Timeline</button>
       <button class="tab-btn" data-tab="daily-avg">Daily Average</button>
+    </div>
+
+    <!-- Daily sub-toggle -->
+    <div id="daily-toggle" class="daily-toggle" style="display:none;">
+      <div class="toggle-group">
+        <button class="toggle-btn active" data-mode="absolute">Absolute</button>
+        <button class="toggle-btn" data-mode="pct-change">% Change</button>
+      </div>
     </div>
 
     <!-- Charts -->
@@ -552,21 +596,164 @@ function buildDailyAvgCard(metric, dailyData) {
   return card;
 }
 
+/* ── build a daily % change bar card ── */
+function buildDailyPctChangeCard(metric, dailyData) {
+  // Compute day-over-day percentage changes
+  const pctChanges = [];
+  const changeLabels = [];
+  for (var i = 1; i < dailyData.length; i++) {
+    var prev = dailyData[i - 1][metric.key];
+    var curr = dailyData[i][metric.key];
+    var pct = prev !== 0 ? ((curr - prev) / prev) * 100 : 0;
+    pctChanges.push(Math.round(pct * 100) / 100);
+    changeLabels.push(dailyData[i].label);
+  }
+
+  if (!pctChanges.length) return document.createElement('div');
+
+  var absValues = pctChanges.map(function(v) { return Math.abs(v); });
+  var maxAbs = Math.max.apply(null, absValues);
+  var pad = maxAbs * 0.15 || 1;
+
+  var avgPct = Math.round(pctChanges.reduce(function(s, v) { return s + v; }, 0) / pctChanges.length * 100) / 100;
+  var dayCount = pctChanges.length;
+
+  var card = document.createElement('div');
+  card.className = 'card';
+
+  var gradLine = document.createElement('div');
+  gradLine.className = 'card-gradient-line';
+  gradLine.style.background = 'linear-gradient(90deg,' + metric.gradient[0] + ',' + metric.gradient[1] + ')';
+  card.appendChild(gradLine);
+
+  var sign = avgPct >= 0 ? '+' : '';
+  var header = document.createElement('div');
+  header.className = 'card-header';
+  header.innerHTML =
+    '<div>' +
+      '<div class="metric-label">' + metric.label + '</div>' +
+      '<div class="metric-value">' + sign + avgPct.toFixed(2) + '% avg</div>' +
+    '</div>' +
+    '<div>' +
+      '<div class="delta-badge" style="color:' + metric.color + ';background:' + metric.color + '15;">' +
+        dayCount + ' day' + (dayCount !== 1 ? 's' : '') + '</div>' +
+      '<div class="window-label">daily % change</div>' +
+    '</div>';
+  card.appendChild(header);
+
+  var wrap = document.createElement('div');
+  wrap.className = 'chart-wrap';
+  var canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+  card.appendChild(wrap);
+
+  var ctx = canvas.getContext('2d');
+
+  // Color bars green for positive, red for negative
+  var barColors = pctChanges.map(function(v) {
+    return v >= 0 ? '#4caf50aa' : '#f44336aa';
+  });
+  var barBorders = pctChanges.map(function(v) {
+    return v >= 0 ? '#4caf50' : '#f44336';
+  });
+  var hoverColors = pctChanges.map(function(v) {
+    return v >= 0 ? '#4caf50' : '#f44336';
+  });
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: changeLabels,
+      datasets: [{
+        data: pctChanges,
+        backgroundColor: barColors,
+        hoverBackgroundColor: hoverColors,
+        borderColor: barBorders,
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15, 15, 20, 0.95)',
+          borderColor: metric.color + '44',
+          borderWidth: 1,
+          cornerRadius: 8,
+          padding: { top: 10, bottom: 10, left: 14, right: 14 },
+          titleFont: { family: "'JetBrains Mono', monospace", size: 12, weight: '400' },
+          titleColor: '#888',
+          bodyFont: { family: "'JetBrains Mono', monospace", size: 16, weight: '700' },
+          bodyColor: metric.color,
+          displayColors: false,
+          callbacks: {
+            title: function(items) {
+              var idx = items[0].dataIndex;
+              return changeLabels[idx] + ' vs ' + dailyData[idx].label;
+            },
+            label: function(item) {
+              var v = item.parsed.y;
+              var s = v >= 0 ? '+' : '';
+              return s + v.toFixed(2) + '%';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: '#555',
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            maxRotation: 0,
+          },
+          grid: { color: 'rgba(255,255,255,0.04)', drawTicks: false },
+          border: { color: 'rgba(255,255,255,0.08)' },
+        },
+        y: {
+          min: -maxAbs - pad,
+          max: maxAbs + pad,
+          ticks: {
+            callback: function(v) { return v.toFixed(1) + '%'; },
+            color: '#555',
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            maxTicksLimit: 5,
+          },
+          grid: { color: 'rgba(255,255,255,0.04)', drawTicks: false },
+          border: { display: false },
+        }
+      },
+    }
+  });
+
+  return card;
+}
+
 /* ── state ── */
 let cachedData = null;
 let activeTab = 'timeline';
+let dailyMode = 'absolute'; // 'absolute' or 'pct-change'
 
 function renderCards() {
   const cardsEl = document.getElementById('cards');
+  const toggleEl = document.getElementById('daily-toggle');
   cardsEl.innerHTML = '';
 
   if (!cachedData || !cachedData.length) return;
 
   if (activeTab === 'timeline') {
+    toggleEl.style.display = 'none';
     METRICS.forEach(m => cardsEl.appendChild(buildTimelineCard(m, cachedData)));
   } else {
+    toggleEl.style.display = 'flex';
     const daily = computeDailyAverages(cachedData);
-    METRICS.forEach(m => cardsEl.appendChild(buildDailyAvgCard(m, daily)));
+    if (dailyMode === 'absolute') {
+      METRICS.forEach(m => cardsEl.appendChild(buildDailyAvgCard(m, daily)));
+    } else {
+      METRICS.forEach(m => cardsEl.appendChild(buildDailyPctChangeCard(m, daily)));
+    }
   }
 }
 
@@ -579,6 +766,19 @@ function setupTabs() {
       tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       this.classList.add('active');
       activeTab = this.dataset.tab;
+      renderCards();
+    });
+  });
+}
+
+function setupDailyToggle() {
+  const toggleEl = document.getElementById('daily-toggle');
+  toggleEl.querySelectorAll('.toggle-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (this.dataset.mode === dailyMode) return;
+      toggleEl.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+      dailyMode = this.dataset.mode;
       renderCards();
     });
   });
@@ -637,6 +837,7 @@ async function init() {
 }
 
 setupTabs();
+setupDailyToggle();
 init();
 setInterval(function() {
   document.getElementById('cards').innerHTML = '';
