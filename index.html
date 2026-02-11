@@ -119,6 +119,40 @@
       color: #f44336;
     }
 
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-top: 20px;
+      margin-bottom: -8px;
+      background: rgba(20, 20, 28, 0.5);
+      border-radius: 10px;
+      padding: 4px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: #555;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .tab-btn:hover {
+      color: #888;
+      background: rgba(255,255,255,0.04);
+    }
+    .tab-btn.active {
+      background: rgba(255,255,255,0.08);
+      color: #eee;
+    }
+
     /* Footer */
     .footer {
       margin-top: 24px;
@@ -155,6 +189,12 @@
     </div>
     <div id="error" class="error-box" style="display:none;"></div>
 
+    <!-- Tabs -->
+    <div id="tabs" class="tabs" style="display:none;">
+      <button class="tab-btn active" data-tab="timeline">Timeline</button>
+      <button class="tab-btn" data-tab="daily-avg">Daily Average</button>
+    </div>
+
     <!-- Charts -->
     <div id="cards" class="cards" style="display:none;"></div>
 
@@ -166,6 +206,7 @@
 
 <script>
 const CSV_URL = 'https://raw.githubusercontent.com/gabriel-berzescu/monitoring-the-situation/main/data/stats.csv';
+const MAX_DAILY_DAYS = 28;
 
 const METRICS = [
   { key: 'agents',   label: 'Agents',   color: '#e8553d', gradient: ['#e8553d','#ff8a65'] },
@@ -200,13 +241,6 @@ function formatNumber(n) {
 
 function formatFull(n) { return n.toLocaleString(); }
 
-function formatTimeUTC(ts) {
-  const d = new Date(ts);
-  const h = String(d.getUTCHours()).padStart(2, '0');
-  const m = String(d.getUTCMinutes()).padStart(2, '0');
-  return h + ':' + m;
-}
-
 function formatDateUTC(ts) {
   const d = new Date(ts);
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -234,7 +268,6 @@ function generateTicks(timeMin, timeMax) {
   return ticks;
 }
 
-/* Does data span more than 1 calendar day? */
 function spansMultipleDays(data) {
   const first = new Date(data[0].time);
   const last = new Date(data[data.length - 1].time);
@@ -251,8 +284,44 @@ function tickLabel(ts, multiDay) {
   return months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ' ' + hh + ':' + mm;
 }
 
-/* ── build a single card ── */
-function buildCard(metric, data) {
+/* ── daily average helpers ── */
+function getDayKey(ts) {
+  const d = new Date(ts);
+  return d.getUTCFullYear() + '-' +
+    String(d.getUTCMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getUTCDate()).padStart(2, '0');
+}
+
+function getDayLabel(dayKey) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const parts = dayKey.split('-');
+  return months[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10);
+}
+
+function computeDailyAverages(data) {
+  const buckets = {};
+  data.forEach(d => {
+    const key = getDayKey(d.time);
+    if (!buckets[key]) buckets[key] = [];
+    buckets[key].push(d);
+  });
+
+  const days = Object.keys(buckets).sort();
+  const recent = days.slice(-MAX_DAILY_DAYS);
+
+  return recent.map(day => {
+    const points = buckets[day];
+    const avg = {};
+    METRICS.forEach(m => {
+      const sum = points.reduce((s, p) => s + p[m.key], 0);
+      avg[m.key] = Math.round(sum / points.length);
+    });
+    return { day: day, label: getDayLabel(day), samples: points.length, ...avg };
+  });
+}
+
+/* ── build a timeline card (existing) ── */
+function buildTimelineCard(metric, data) {
   const values = data.map(d => d[metric.key]);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -266,17 +335,14 @@ function buildCard(metric, data) {
   const ticks = generateTicks(timeMin, timeMax);
   const multiDay = spansMultipleDays(data);
 
-  /* DOM */
   const card = document.createElement('div');
   card.className = 'card';
 
-  /* gradient line */
   const gradLine = document.createElement('div');
   gradLine.className = 'card-gradient-line';
   gradLine.style.background = 'linear-gradient(90deg,' + metric.gradient[0] + ',' + metric.gradient[1] + ')';
   card.appendChild(gradLine);
 
-  /* header */
   const header = document.createElement('div');
   header.className = 'card-header';
   header.innerHTML =
@@ -291,18 +357,16 @@ function buildCard(metric, data) {
     '</div>';
   card.appendChild(header);
 
-  /* canvas */
   const wrap = document.createElement('div');
   wrap.className = 'chart-wrap';
   const canvas = document.createElement('canvas');
   wrap.appendChild(canvas);
   card.appendChild(wrap);
 
-  /* Chart.js */
   const ctx = canvas.getContext('2d');
   const gradient = ctx.createLinearGradient(0, 0, 0, 180);
-  gradient.addColorStop(0, metric.color + '40'); /* 25% opacity */
-  gradient.addColorStop(1, metric.color + '05'); /* ~2% */
+  gradient.addColorStop(0, metric.color + '40');
+  gradient.addColorStop(1, metric.color + '05');
 
   new Chart(ctx, {
     type: 'line',
@@ -380,6 +444,146 @@ function buildCard(metric, data) {
   return card;
 }
 
+/* ── build a daily average bar card ── */
+function buildDailyAvgCard(metric, dailyData) {
+  const values = dailyData.map(d => d[metric.key]);
+  const labels = dailyData.map(d => d.label);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min) * 0.08 || max * 0.05;
+
+  const overallAvg = Math.round(values.reduce((s, v) => s + v, 0) / values.length);
+  const dayCount = dailyData.length;
+
+  const card = document.createElement('div');
+  card.className = 'card';
+
+  const gradLine = document.createElement('div');
+  gradLine.className = 'card-gradient-line';
+  gradLine.style.background = 'linear-gradient(90deg,' + metric.gradient[0] + ',' + metric.gradient[1] + ')';
+  card.appendChild(gradLine);
+
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  header.innerHTML =
+    '<div>' +
+      '<div class="metric-label">' + metric.label + '</div>' +
+      '<div class="metric-value">' + formatNumber(overallAvg) + ' avg</div>' +
+    '</div>' +
+    '<div>' +
+      '<div class="delta-badge" style="color:' + metric.color + ';background:' + metric.color + '15;">' +
+        dayCount + ' day' + (dayCount !== 1 ? 's' : '') + '</div>' +
+      '<div class="window-label">daily average</div>' +
+    '</div>';
+  card.appendChild(header);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'chart-wrap';
+  const canvas = document.createElement('canvas');
+  wrap.appendChild(canvas);
+  card.appendChild(wrap);
+
+  const ctx = canvas.getContext('2d');
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: values,
+        backgroundColor: metric.color + '88',
+        hoverBackgroundColor: metric.color,
+        borderColor: metric.color,
+        borderWidth: 1,
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(15, 15, 20, 0.95)',
+          borderColor: metric.color + '44',
+          borderWidth: 1,
+          cornerRadius: 8,
+          padding: { top: 10, bottom: 10, left: 14, right: 14 },
+          titleFont: { family: "'JetBrains Mono', monospace", size: 12, weight: '400' },
+          titleColor: '#888',
+          bodyFont: { family: "'JetBrains Mono', monospace", size: 16, weight: '700' },
+          bodyColor: metric.color,
+          displayColors: false,
+          callbacks: {
+            title: function(items) {
+              var idx = items[0].dataIndex;
+              return labels[idx] + ' (' + dailyData[idx].samples + ' samples)';
+            },
+            label: function(item) { return formatFull(item.parsed.y) + ' avg'; }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: '#555',
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            maxRotation: 0,
+          },
+          grid: { color: 'rgba(255,255,255,0.04)', drawTicks: false },
+          border: { color: 'rgba(255,255,255,0.08)' },
+        },
+        y: {
+          min: min - pad,
+          max: max + pad,
+          ticks: {
+            callback: function(v) { return formatNumber(v); },
+            color: '#555',
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            maxTicksLimit: 5,
+          },
+          grid: { color: 'rgba(255,255,255,0.04)', drawTicks: false },
+          border: { display: false },
+        }
+      },
+    }
+  });
+
+  return card;
+}
+
+/* ── state ── */
+let cachedData = null;
+let activeTab = 'timeline';
+
+function renderCards() {
+  const cardsEl = document.getElementById('cards');
+  cardsEl.innerHTML = '';
+
+  if (!cachedData || !cachedData.length) return;
+
+  if (activeTab === 'timeline') {
+    METRICS.forEach(m => cardsEl.appendChild(buildTimelineCard(m, cachedData)));
+  } else {
+    const daily = computeDailyAverages(cachedData);
+    METRICS.forEach(m => cardsEl.appendChild(buildDailyAvgCard(m, daily)));
+  }
+}
+
+/* ── tabs ── */
+function setupTabs() {
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (this.dataset.tab === activeTab) return;
+      tabsEl.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+      activeTab = this.dataset.tab;
+      renderCards();
+    });
+  });
+}
+
 /* ── main ── */
 async function init() {
   const dotEl    = document.getElementById('status-dot');
@@ -388,6 +592,7 @@ async function init() {
   const cardsEl  = document.getElementById('cards');
   const subEl    = document.getElementById('subtitle');
   const footerEl = document.getElementById('footer');
+  const tabsEl   = document.getElementById('tabs');
 
   try {
     const res = await fetch(CSV_URL);
@@ -397,10 +602,12 @@ async function init() {
 
     if (!data.length) throw new Error('CSV is empty');
 
-    /* header */
+    cachedData = data;
+
     dotEl.className = 'status-dot ok';
     loadEl.style.display = 'none';
     cardsEl.style.display = 'flex';
+    tabsEl.style.display = 'flex';
     subEl.style.display = 'block';
     footerEl.style.display = 'block';
 
@@ -414,12 +621,10 @@ async function init() {
     };
     subEl.textContent = fmt(first) + ' → ' + fmt(last) + ' UTC · ' + data.length + ' samples · live from GitHub';
 
-    /* render cards */
-    METRICS.forEach(m => cardsEl.appendChild(buildCard(m, data)));
+    renderCards();
 
-    /* last-fetched note in footer */
     const now = new Date();
-    footerEl.textContent += ' · fetched ' +
+    footerEl.textContent = 'data pulled live from repo · points positioned by actual timestamp · github.com/gabriel-berzescu/monitoring-the-situation · fetched ' +
       String(now.getUTCHours()).padStart(2,'0') + ':' +
       String(now.getUTCMinutes()).padStart(2,'0') + ' UTC';
 
@@ -431,7 +636,7 @@ async function init() {
   }
 }
 
-/* auto-refresh every 5 minutes */
+setupTabs();
 init();
 setInterval(function() {
   document.getElementById('cards').innerHTML = '';
